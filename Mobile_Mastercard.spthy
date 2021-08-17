@@ -1,0 +1,322 @@
+theory Mastercard_ApplePay
+
+begin
+
+builtins:   signing, asymmetric-encryption
+
+functions:  MAC/2 //(Key, payload)
+
+rule Terminal_Bank_Network:
+    [ Send(S, R, channelID, msg) ]-->[ Recv(S, R, channelID, msg) ]
+
+restriction once:
+    "All a #i #j. Once(a)@i & Once(a)@j ==> #i = #j"
+
+restriction equal:
+  "All a b #i. Eq(a, b)@i ==> a = b"
+
+/* Facts used in model:
+
+The certificate autherites:
+    !LtkCA($CA, ~privkCA) Cert auth $CA has the private key privkCA 
+    !CertCA($CA, cert) Cert auth $CA's public key certificate is cert
+
+The banks
+    !LtkBank($Bank, ~privkBank),
+    !CertBank($Bank, cert),
+    !IssuingCA($Bank, $CA),
+
+A Mastercard:
+    !Card(~Track2, $Bank, ~KM, ~privkCard, certCard, certBank, cardAIP, CVMlist)   (We do not model the file locator: AFL
+
+The Terminal
+    !Terminal($Term,MCC) : The merchent code of the Terminal, either 'transit' or 'retail' 
+    Terminal_Running($Term, ~Track2, 'high', ~UN, certCard)
+
+Sign types: 
+    01: card cert
+    02: bank cert
+    03: CA cert
+    04: SDAD
+
+Important checks made by the protocol
+    CHECK 1: The Terminal_Sends_READRECORD_MC rule checks that the cards AIP is CDA mode
+    CHECK 2: Before generating the GEN AC message the reader will check the CVM_list includes online.
+    CHECK 3: After the read record the terminal must check bank and card Certs, using a CA. 
+    CHECK 4: In reponse to GEN AC, the device may approve any amount if CDCVM used
+    CHECK 5: Device may approve a low amount with No CDCVM if Magic Bytes are used and the MCC is transit
+    CHECK 6: Check SDAD is correctly signed with the expected fields. 
+    CHECK 7: Bank can approve a high or low amount if IAD to shows that CDCVM was used. 
+     CHECK 8: Bank can approve a low amount without CDCVM if MCC = transit. 
+*/
+
+
+rule Create_Mastercard_Apple_Pay:
+    let 
+        pubkCard = pk(~privkCard)
+        cont = <'01', ~Track2, pubkCard, $Bank>
+        certCard = <cont, sign{cont}~privkBank>
+        cardAIP = <'CDA','CDCVM'> // Card will only CDA and offers CDCVM
+        CVMlist ='PIN_online'     // Card would like online auth, other list options (e.g. magstrip not modelled)
+    in
+    [ 
+        !LtkBank($Bank, ~privkBank),  !CertBank($Bank, certBank),
+        Fr(~Track2), Fr(~privkCard), Fr(~KM)
+    ]
+    -->
+    [ !Card(~Track2, $Bank, ~KM, ~privkCard, pubkCard, certCard, certBank, cardAIP, CVMlist) ]
+  
+rule Create_CA:
+    let pubkCA = pk(~privkCA)
+        cont = <'03', $CA, pubkCA, $CA>
+        cert = <cont, sign{cont}~privkCA>
+    in
+    [ Fr(~privkCA) ]
+    --[ Once($CA) ]->
+    [   
+        !LtkCA($CA, ~privkCA),
+        !CertCA($CA, cert),
+        Out(pubkCA)
+    ]
+
+rule Create_Bank:
+    let pubkBank = pk(~privkBank)
+        cont = <'02', $Bank, pubkBank, $CA>
+        cert = <cont, sign{cont}~privkCA>
+    in
+    [ Fr(~privkBank), !LtkCA($CA, ~privkCA) ]
+  --[ Once($Bank) ]->
+    [ 
+        !LtkBank($Bank, ~privkBank), !CertBank($Bank, cert),
+        !IssuingCA($Bank, $CA), Out(pubkBank)
+    ]
+
+rule Create_Transit_Terminal:
+    let
+        MCC='transit'
+    in 
+        [ ] --[ TerminalCreated($Term,MCC), Once($Term) ]-> [ !Terminal($Term,MCC) ]
+
+rule Create_Retail_Terminal:
+    let
+        MCC='retail'
+    in 
+        [ ] --[ TerminalCreated($Term,MCC), Once($Term) ]-> [ !Terminal($Term,MCC) ]
+
+
+
+/* We only consider comprimsed cards (e.g. key leakage via power analysis attacks) 
+   Compromised terminals, banks and CAs are outisde our attack model. */
+
+rule Compromise_Card:
+    [ !Card(Track2, Bank, KM, privkCard, pubkCard, certCard, certBank, cardAIP, CVMlist) ]
+  --[ Compromise(Track2) ]->
+    [ Out(<Track2, privkCard, KM, certCard>) ]
+
+/*
+   PROTOCOL RULES 
+*/
+
+rule Terminal_Sends_GPO_MC:
+    [  ] --> [ Out(<'GET_PROCESSING_OPTIONS'>) ]
+
+rule Card_Responds_To_GPO_MC_AP:
+    [ 
+        !Card(~Track2, $Bank, ~KM, ~privkCard, pubkCard, certCard, certBank, cardAIP, CVMlist),
+        In(<'GET_PROCESSING_OPTIONS'>) ] 
+    --> [ Out(<cardAIP,'AFL'>) ]
+
+// CHECK 1: Reader is online CDA only, so Check the AIP
+rule Terminal_Sends_READRECORD_MC:
+    let
+        AIP =<'CDA',CDCVMmode>
+    in
+    [ In(<AIP,'AFL'>) ] 
+    -->
+    [ Out(<'READRECORD'>), Terminal_Started(AIP) ]
+
+// Contents of CDOL1 and 2 not modelled, it is assumpted they will match the CDOL data below, 
+// if they don't the protocol will halt.
+rule Card_Responds_To_READRECORD_MC_AP:
+    [ 
+        !Card(~Track2, $Bank, ~KM, ~privkCard, pubkCard, certCard, certBank, cardAIP, CVMlist),
+        In(<'READRECORD'>) ] 
+    --> [ Out(<~Track2, CVMlist, certCard, certBank, 'CDOL1', 'CDOL2'>) ]
+
+// GEN AC command for a high amout. 
+// Reader does not check if the device can do CDCVM before trying a high amount, because the card
+// might agree to a high amount without CDCVM and ask the reader to do Tap and PIN (Euro cards only
+// Rest of The World cards do not support this.  
+//
+// CHECK 2: CVM_list must include 'PIN_online'.
+// CHECK 3: Check bank and card Certs. 
+rule Terminal_Sends_GEN_AC_High_MC:
+    let 
+        CDOL1_DATA = <'amount_high', ~UN, MCC, 'CDA'>
+        AIP =<'CDA',CDCVMmode>
+        certBank = <<'02', $Bank, pubkBank, $CA>, sigCA>
+        certCard = <<'01', Track2, pubkCard, $Bank>, sigBank>
+    in
+    [ 
+        Fr(~UN), In(<Track2, 'PIN_online', certCard, certBank, CDOL1, CDOL2>),
+        !Terminal($Term,MCC), Terminal_Started(AIP),
+        !CertCA($CA, <<'03', $CA, pubkCA, $CA>, sign1>)
+    ] 
+    --[
+        Eq( verify(sigCA, <'02', $Bank, pubkBank, $CA>, pubkCA), true),
+        Eq( verify(sigBank, <'01', Track2, pubkCard, $Bank>, pubkBank), true)
+    ]-> 
+    [ 
+        Out(<'GEN_AC', CDOL1_DATA >),
+        Terminal_Running($Term, Track2, 'amount_high', ~UN, AIP, pubkCard) 
+    ]
+
+// CHECK 2: CVM_list must include 'PIN_online'.
+// CHECK 3: Check bank and card Certs. 
+rule Terminal_Sends_GEN_AC_Low_MC:
+    let 
+        CDOL1_DATA = <'amount_low', ~UN, MCC, 'CDA'>
+        AIP =<'CDA',CDCVMmode>
+        certBank = <<'02', $Bank, pubkBank, $CA>, sigCA>
+        certCard = <<'01', Track2, pubkCard, $Bank>, sigBank>
+    in
+    [ 
+        Fr(~UN), In(<Track2, 'PIN_online', certCard, certBank, CDOL1, CDOL2>),
+        !Terminal($Term,MCC), Terminal_Started(AIP), 
+        !CertCA($CA, <<'03', $CA, pubkCA, $CA>, sign1>)
+    ] 
+    --[
+        Eq( verify(sigCA, <'02', $Bank, pubkBank, $CA>, pubkCA), true),
+        Eq( verify(sigBank, <'01', Track2, pubkCard, $Bank>, pubkBank), true)
+    ]-> 
+    [ 
+        Out(<'GEN_AC', CDOL1_DATA >),
+        Terminal_Running($Term, Track2, 'amount_low', ~UN, AIP, pubkCard) 
+    ]
+
+
+// CHECK 4: Device may approve any amount if CDCVM used
+rule Card_Responds_To_GEN_AC_High_Or_Low_CDCVM_MC:
+    let 
+        CDOL1_DATA = <amount, UN, MCC, 'CDA'>
+        cont = <'01', Track2, pubkCard, $Bank>
+        certCard = <cont, sign{cont}~privkBank> // Reader needs bank pub key.
+        KS = aenc{~ATC}KM
+        AC = MAC(KS,<CDOL1_DATA,AIP,~ATC>)
+        SDAD = sign{'04', AC, CDOL1_DATA, UN}privkCard
+    in
+    [ 
+        Fr(~ATC), In(<'GEN_AC', CDOL1_DATA >),
+        !Card(Track2, $Bank, KM, privkCard, pubkCard, certCard, certBank, AIP, CVMlist)
+    ] 
+    --[ CDCVM_Used( UN, Track2) ]->
+    [ Out( <~ATC, SDAD, AC, 'IAD_AP_CDCVM'> ) ]
+
+// CHECK 5: Device may approve a low amount with No CDCVM if Magic Bytes are used and the MCC is transit
+rule Card_Responds_To_GEN_AC_Low_NoCDCVM_MC:
+    let 
+        CDOL1_DATA = <'amount_low', UN, 'transit', 'CDA'>
+        KS = aenc{~ATC}KM
+        AC = MAC(KS,<CDOL1_DATA,AIP,~ATC>)
+        SDAD = sign{'04', AC, CDOL1_DATA, UN}privkCard
+    in
+    [ 
+        Fr(~ATC), In(<'GEN_AC', CDOL1_DATA >),
+        !Card(Track2, $Bank, KM, privkCard, pubkCard, certCard, certBank, AIP, CVMlist)
+    ] 
+    --[ MagicBytesRequired( UN, Track2) ]->
+    [ Out( <~ATC, SDAD, AC, 'IAD_AP_NoCDCVM'> ) ]
+
+// Reader does not check the IAD for CDCVM, but sends this to the bank to use.
+// CHECK 6: Check SDAD is correctly signed with the expected fields. 
+rule Terminal_Forward_To_Bank:
+    let
+        CDOL1_DATA = <amount, UN, MCC, 'CDA'>
+    in
+    [ 
+        In(<ATC, SDAD, AC, IAD>), !Terminal($Term,MCC),  Fr(~sessionID),
+        Terminal_Running($Term, Track2, amount, UN, AIP, pubkCard)
+    ]
+    --[
+        Eq( verify(SDAD, <'04', AC, CDOL1_DATA, UN>, pubkCard), true)
+    ]->
+    [ 
+        Send($Term,$Bank,~sessionID,< Track2, AIP, CDOL1_DATA, ATC, IAD, AC>),
+        Terminal_Sent_to_Bank($Term, Track2, amount, UN, ~sessionID) 
+    ]
+
+// CHECK 7: Bank can approve a high or low amount if IAD to shows that CDCVM was used. 
+rule Bank_response_to_Terminal_High:
+    let
+        CDOL1_DATA = <'amount_high', UN, MCC, 'CDA'>
+        Ks = aenc{ATC}KM
+        AC = MAC(Ks, <CDOL1_DATA, AIP, ATC>)
+    in
+    [ 
+        Recv($Term,$Bank,sessionID,< Track2, AIP, CDOL1_DATA, ATC, 'IAD_AP_CDCVM', AC>),
+        !Card(Track2, $Bank, KM, privkCard, pubkCard, certCard, certBank, AIP, CVMlist) ]
+    --[ 
+        Bank_Accepts($Term, $Bank, UN, MCC, sessionID, Track2, AIP, CDOL1_DATA, ATC, 'IAD_AP_CDCVM', AC),
+        Bank_Accepts_Short(UN, Track2), Bank_Accepts_CDCVM(UN, Track2) 
+    ]-> [ ]
+
+// CHECK 8: Bank can approve a low amount without CDCVM if MCC = transit. 
+rule Bank_response_to_Terminal_Low:
+    let
+        CDOL1_DATA = <'amount_low', UN, 'transit', 'CDA'>
+        Ks = aenc{ATC}KM
+        AC = MAC(Ks, <CDOL1_DATA, AIP, ATC>)
+    in
+    [ 
+        Recv($Term,$Bank,sessionID,< Track2, AIP, CDOL1_DATA, ATC, 'IAD_AP_NoCDCVM', AC>),
+        !Card(Track2, $Bank, KM, privkCard, pubkCard, certCard, certBank, AIP, CVMlist) ]
+    --[ 
+        Bank_Accepts($Term, $Bank, UN, 'transit', sessionID, Track2, AIP, CDOL1_DATA, ATC, 'IAD_AP_NoCDCVM', AC),
+        Bank_Accepts_Short(UN, Track2), Bank_Accepts_NoCDCVM(UN, Track2) 
+    ]-> [ ]
+
+
+// Sanity checks: protocol can terminate with and without CDCVM
+
+
+lemma Can_Finish_NoCDCVM:
+  exists-trace
+  "Ex Track2 UN #i.
+     Bank_Accepts_NoCDCVM(UN, Track2)@i"
+
+lemma Can_Finish_CDCVM:
+  exists-trace
+  "Ex Track2 UN #i.
+    Bank_Accepts_CDCVM(UN, Track2)@i"
+
+
+// Authentication of the MMC (need if this is going to be used by the bank for a correctness check
+lemma  Bank_Gets_Correct_MMC:
+  "All Term Bank sessionID Track2 AIP CDOL1_DATA ATC IAD AC UN MCC #i.
+    Bank_Accepts( Term, Bank, UN, MCC, sessionID, Track2, AIP, CDOL1_DATA, ATC, IAD, AC )@i
+   ==>
+    Ex #j.  TerminalCreated(Term,MCC)@j"
+
+
+// Following three results so that only transit terminals can bypass the CDCVM 
+//   i.e., the Visa Apple Pay attack doesn't work against uncompromised Mastercard.  
+lemma High_Amount_Needs_CDCVM:
+  "All UN Track2 #i.
+    (Bank_Accepts_CDCVM(UN, Track2)@i & not (Ex #a. Compromise(Track2)@a))
+   ==>
+    Ex #j. CDCVM_Used( UN, Track2)@j"
+
+lemma Bypassing_CDCVM_Needs_MagicBytes:
+  "All UN Track2 #i.
+    (Bank_Accepts_Short(UN, Track2)@i & not (Ex #a. Compromise(Track2)@a))
+   ==>
+    (Ex #j. CDCVM_Used( UN, Track2)@j) | (Ex #k. MagicBytesRequired( UN, Track2)@k)"
+
+lemma  Bypassing_CDCVM_Needs_MCC_Equal_Transit:
+  "All Term Bank sessionID Track2 AIP CDOL1_DATA ATC IAD AC UN MCC #i.
+    (Bank_Accepts( Term, Bank, UN, MCC, sessionID, Track2, AIP, CDOL1_DATA, ATC, IAD, AC )@i
+      & not (Ex #a. Compromise(Track2)@a))
+   ==>
+    (Ex #j. CDCVM_Used( UN, Track2)@j) | (MCC='transit')"
+
+end
