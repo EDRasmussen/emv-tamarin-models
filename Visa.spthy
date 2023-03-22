@@ -1,11 +1,8 @@
 /*
 
 Model for mobile-apps with VISA card CDA and DDA mode
-
 DDA mode --> occurs only in transport/transit mode  (an extra read-records and the SDAD is sent after the GPO response; only after SDAD is checked, the AC is sent to the the bank)
-
 CDA mode --> occurs in non-transport (no SDAD sent; AC sent to the bank right after the GPO response)
-
 
 ==TERMINALS==
 -- terminals can be in transport and non-transport mode
@@ -17,7 +14,7 @@ CDA mode --> occurs in non-transport (no SDAD sent; AC sent to the bank right af
 -- terminal sends to bank an MCC code (which is different for transport and non-transport but not more refined for now)
 
 ==APPS==
--- mobile apps with a visa card,  Samsung-Pay and Apple-Pay
+-- mobile apps with a visa card, Samsung-Pay and Apple-Pay
 -- Samsung-Pay on GPO-receipt only accepts 'zero' values in transport mode
 -- Apple-Pay do not check the value in transport mode
 -- mobile apps have a CVR field in which they say if they CV on device, for high/low value (i.e., CVR byte 5)
@@ -26,8 +23,6 @@ CDA mode --> occurs in non-transport (no SDAD sent; AC sent to the bank right af
 -- IAD included in the AC
 
 ==BANK==
-
-behaviour
 -- can not check the IAD 
 -- can check the IAD-format against the MCC code
 -- can check the CVR-byte5 inside the IAD against value and IADformat to see if auth on device was performed when needed
@@ -65,7 +60,6 @@ lemma   bank_checking_MCC_allows_RelayToSameMCC  --> holds
 summary of summaries:
 
 analyzed: Mobile_Visa_EMV.spthy
-
   terminalModes_CDCVM_aligned_at_bankEnd (all-traces): falsified - found trace (6 steps)
   applePay_attack (exists-trace): verified (21 steps)
   transportMode_onlyForZero_onApp_stops_ModeChange (all-traces): verified (172 steps)
@@ -89,10 +83,7 @@ sanity checks
   correctness_apple_high_transport_noAuth (exists-trace): verified (15 steps)
 
 ==============================================================================
-
 */
-
-
 
 theory Mobile_Visa_EMV_Fixed
 
@@ -745,7 +736,7 @@ rule TransportTerminal_Receives_ExtraRecords_SDAD:
         // We are _not_ checking the above against AC from the card; on purpose -- extreme
         Once(<~PAN, ATC, 'Bank'>),
         Eq(AC, MAC(f(~MK, ATC), <PDOL, AIP, ATC, IAD>)), // checking the above against AC from the card
-        Eq(format, MCC), //check MCC against IAD format (this does not break the trace)
+        Eq(format, MCC), // check MCC against IAD format (this does not break the trace)
 
         // _restrict(CDCVM_Check(format, cardValidation)), // Checks that CDCVM HAS BEEN ALTERED (BLOCKS THE TRACE)
  
@@ -874,44 +865,6 @@ lemma correctness_general:
    "
 
 /*
-==Sanity check2 ==
-to pass: samsung-pay authenticated high transactions in non-transport mode
-*/
-lemma correctness_samsung_high_nontransport: exists-trace
-"
-    Ex PAN PDOL cardValue MCC #t01 #t02
-    .
-    Card_PostGPO(PAN, PDOL,'High', 'nontransport', 'Auth') @ t01
-    &
-    Handset('samsung') @ t01
-    &
-    Bank_Got_AC(PAN, 'High', 'Auth', cardValue, 'nontransport', MCC) @ t02
-    &
-    #t01<#t02
-    //restrict the trace further by preventing each rule to fire more than once
-    &   (All event #i #j . OnlyOnce(event) @ i & OnlyOnce(event) @ j ==> #i=#j)
-"
-
-/*
-==Sanity check2 ==
- to fail, meaning that samsung-pay does not do high transactions in transport mode
-*/
-lemma correctness_samsung_high_transport_anyAuth: exists-trace
-"
-    Ex PAN PDOL auth cardValue MCC #t01 #t02
-    .
-    Card_PostGPO(PAN, PDOL,'High', 'transport', auth) @ t01
-    &
-    Handset('samsung') @ t01
-    &
-    Bank_Got_AC(PAN, 'High', auth ,cardValue, 'transport' ,MCC) @ t02
-    &
-    #t01<#t02
-    //restrict the trace further by preventing each rule to fire more than once
-    &   (All event #i #j . OnlyOnce(event) @ i & OnlyOnce(event) @ j ==> #i=#j)
-"
-
-/*
 ==Sanity check3 ==
 to pass: apple-pay does do high transactions in non-transport mode
 */
@@ -1018,7 +971,7 @@ lemma applePay_attack_PDOL_check:
     &
     t05<t06
     //restrict the trace further by preventing each rule to fire more than once
-    &   (All event #i #j . OnlyOnce(event) @ i & OnlyOnce(event) @ j ==> #i=#j)
+    & (All event #i #j . OnlyOnce(event) @ i & OnlyOnce(event) @ j ==> #i=#j)
    "
 
 /*
@@ -1046,43 +999,14 @@ lemma terminalModes_CDCVM_aligned_at_bankEnd:
 /*
 to pass:
 
-SamsungPay does not suffer from the Apple-Pay attack as it does not allow for non-zero payments in transport mode
-*/
-lemma transportMode_onlyForZero_onApp_stops_ModeChange:
-
-"All  PAN valuecard modeEnd mcc #t01 #t02
-    .
-    //if we are using an app that only allows zero payments 
-    //in transit/transport mode
-    Handset('samsung') @ t01
-    &
-    // no device validation; zero or low value at the bank
-    Bank_Got_AC(PAN, valuecard,  'noAuth', 'Zero_Low', modeEnd, mcc) @ t02
-    ==>
-    // The phone does not allow for non-authentication of non-zero values in transport mode
-    not(Ex PDOL . Card_PostGPO(PAN, PDOL,valuecard, 'transport', 'NoCDCVM') @ t01 
-    & not (valuecard = 'Zero')
-    )
-    |
-    (
-     Ex A #a. Compromise(A)@a
-    )
-"
-
-
-/*
-to pass:
-
 Apple attack goes away when issuers check the IAD 
 (as only transport should have CVR byte5 bit2 on 0)
 */
 lemma bank_checking_CVR_stops_ModeChange:
-
 "All PAN value valuecard iadFormat auth  #t02
     .
     //  device validation -- auth; some limit (high, low) at the bank
     Bank_Got_AC_checkedCVR(PAN, value,  auth, valuecard,  iadFormat) @ t02
-
      ==>
     /*The phone saw  identified the mode mirrors it in the iadFormat, and its  CDCVM 
     status in 'auth' is as the bank got it*/
@@ -1137,9 +1061,9 @@ exists-trace
     Card_PostGPO(PAN, PDOL2,value, mode, CDCVM_noCDCVM1) @ t04 //card gets GPO  from relay terminal 
     &
     Terminal_AC_in(PDOL2,mode,value,CDCVM_noCDCVM1) @ t05  //relay terminal got AC
-        &
-     Bank_Got_checkMCC_full(ID1,PAN, value,    formatIAD, mcc) @ t06  //bank checks real terminal and alllow
-        &
+    &
+    Bank_Got_checkMCC_full(ID1,PAN, value,    formatIAD, mcc) @ t06  //bank checks real terminal and alllow
+    &
     t01<t02
     &
     t02<t03
