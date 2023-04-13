@@ -109,6 +109,8 @@ predicates:
 
         //customer authentication expected by mode
         CDCVM_OnOff_ByModes(mode,cvr) <=> ((mode = 'transport' & cvr = 'noAuth') | (mode = 'nontransport' & cvr ='Auth')),
+        
+        
         CDCVM_Check(mode, cvr) <=> ((mode = 'transport' & cvr = 'noAuth') | (mode = 'nontransport' & cvr ='Auth')),
 
         //as per what Samsung-pay seems to do; allowing only zero on transport non-authenticated
@@ -142,11 +144,17 @@ rule Generate_Amount_High:
 rule Generate_Amount_Zero:
     [ ]--[ Once(<$amount, 'Amount'>) ]->[ !Value($amount, 'Zero') ]
 
+/* 
+Generating an ATC:
+Premise: We build a fresh ATC, which is the new ATC
+Conclusion: We generate a persistent fact that !ATC(~ATC) (no association) and reveals this
+this allows any adversary to get a hold of the ATC, thus making the ATC insecure. 
+*/
 rule Generate_ATC:
-    [ Fr(~ATC) ]-->[ !ATC(~ATC), Out(~ATC) ]
+    [ Fr(~ATC) ] --> [ !ATC(~ATC), Out(~ATC) ]
 
 rule Generate_SDAD_Format_Visa:
-    [ ]--> [ !SDADFormat('05', 'TC'), !SDADFormat('95', 'ARQC') ]
+    [ ] --> [ !SDADFormat('05', 'TC'), !SDADFormat('95', 'ARQC') ]
 
 rule Create_CA:
     let pubkCA = pk(~privkCA)
@@ -309,8 +317,8 @@ Note: useful for tap-and-pin later on
     ]
 
     --[
-            Terminal_Created(cty, curr, mode),
-            OnlyOnce('Create_Terminal')
+        Terminal_Created(cty, curr, mode),
+        OnlyOnce('Create_Terminal')
     ]->
 
     [
@@ -334,9 +342,9 @@ rule Terminal_Sends_GPO_AnyValue_AnyMode_Visa:
     --[
         OneTerminal(),
         Role($Terminal, 'Terminal'),
-        _restrict(NonTransportNonZero(mode,value)), //non-transport terminals do not charge 0
-        Terminal_TTQ_out(PDOL,mode, value),
-        Terminal_TTQ_out_full(~UN,PDOL,mode, value),
+        _restrict(NonTransportNonZero(mode, value)), //non-transport terminals do not charge 0
+        Terminal_TTQ_out(PDOL, mode, value),
+        Terminal_TTQ_out_full(~UN, PDOL, mode, value),
         OnlyOnce('Terminal_Sends_GPO_AnyValue_AnyMode_Visa')
     ]->
 
@@ -346,9 +354,8 @@ rule Terminal_Sends_GPO_AnyValue_AnyMode_Visa:
         -- non-transport terminals never sent any special bytes,"NoMagicBytes"; see optBytes
         */
         Out(<optBytes, 'GET_PROCESSING_OPTIONS', PDOL>),
-        
         Terminal_Sent_GPO_Visa($Terminal, PDOL),
-        Terminal_TTQ_Sent(PDOL,mode,$amount,value)
+        Terminal_TTQ_Sent(PDOL, mode, $amount, value)
     ]
 
 
@@ -453,7 +460,7 @@ rule Card_Responds_To_GPO_EMV_Visa_Apple:
         track2ED = <~PAN, ~expDate>
         CID = 'ARQC'
         CTQ = CDCVM_noCDCVM
-        CVR =<CDCVM_noCDCVM,valueType> //card judgement
+        CVR = <CDCVM_noCDCVM,valueType> //card judgement
         IAD = <'IADmobile', CID, CVR, perceivedAppMode>
         AIP = <'EMVDDA', $furtherData>
         AC = MAC(f(~MK, ATC), <PDOL, AIP, ATC, IAD>)
@@ -464,31 +471,29 @@ rule Card_Responds_To_GPO_EMV_Visa_Apple:
         SDAD = sign{'05', CID, AC, T, UN}~privkCard
     in
     [
-        ComputedCVR(CDCVM_noCDCVM,valueType, perceivedAppMode, PDOL, 'apple'),
+        ComputedCVR(CDCVM_noCDCVM, valueType, perceivedAppMode, PDOL, 'apple'),
         !Shk(~PAN, ~MK),
         !AID(~PAN, 'Visa'),
         !LtkCard(~PAN, ~privkCard),
         !ExpirationDate(~PAN, ~expDate),
         !IssuingBank(~PAN, $Bank),
-        !ATC(ATC)
+        !ATC(ATC) // Generates new ATC that can be used arbitrarily often
     ]
-
   --[
         OneCard(),
         Handset('apple'),
         Once(<~PAN, ATC, 'Card'>),
         Role(~PAN,'Card'),
         Card_PostGPO(~PAN, PDOL, value, perceivedAppMode, CDCVM_noCDCVM),
-        
-         // a la apple-pay; no real check on value re the CVR/CDCVM
+
+        // a la apple-pay; no real check on value re the CVR/CDCVM
         Card_PostGPONoCheckShort(~PAN, CDCVM_noCDCVM, perceivedAppMode, valueType),
         Card_PostGPONoCheckShortest(~PAN, valueType, perceivedAppMode),
         
         OnlyOnce('Card_Responds_To_GPO_EMV_Visa_NoCheck')
     ]->
-
     [
-        Out(< AIP, 'AFL', track2ED, IAD, AC, CID, ATC, CTQ >),
+        Out(<AIP, 'AFL', track2ED, IAD, AC, CID, ATC, CTQ>),
         Card_PostGPO2(~PAN, CDCVM_noCDCVM, perceivedAppMode, valueType, X, T, SDAD)
     ]
 
@@ -514,8 +519,6 @@ rule Card_Responds_To_GPO_EMV_Visa_Samsung:
         AC = MAC(f(~MK, ATC), <PDOL, AIP, ATC, IAD>)
         transaction = <~PAN, AIP, CTQ, PDOL, ATC, AC, IAD>
 
-  
-  
         X = <PDOL, CTQ>
         T = h(<X, CID, ATC, AC, IAD>)
         SDAD = sign{'05', CID, AC, T, UN}~privkCard
@@ -525,7 +528,7 @@ rule Card_Responds_To_GPO_EMV_Visa_Samsung:
         ComputedCVR(CDCVM_noCDCVM,valueType, perceivedAppMode, PDOL,'samsung'),
         !Shk(~PAN, ~MK),
         !AID(~PAN, 'Visa'),
-         !LtkCard(~PAN, ~privkCard),
+        !LtkCard(~PAN, ~privkCard),
         !ExpirationDate(~PAN, ~expDate),
         !IssuingBank(~PAN, $Bank),
         !ATC(ATC)
@@ -548,14 +551,9 @@ rule Card_Responds_To_GPO_EMV_Visa_Samsung:
     ]->
 
     [
- 
-        Out(< AIP, 'AFL', track2ED, IAD, AC, CID, ATC, CTQ >),
+        Out(<AIP, 'AFL', track2ED, IAD, AC, CID, ATC, CTQ>),
         Card_PostGPO2(~PAN, CDCVM_noCDCVM, perceivedAppMode, valueType, X, T, SDAD)
     ]
-
-
-
-
 
 /*
 Terminal receives answer to GPO
@@ -567,33 +565,39 @@ If it is a non-transport terminal, then no extra read-records are asked and the 
 */
 rule NonTransportTerminal_Receives_Records_EMV_Visa:
     let
-        CVR=<CDCVM_noCDCVM,valueType>
-        IAD=<'IADmobile', CID, CVR, perceivedAppMode>
-        AIP=<'EMV', furtherData>
+        CVR = <CDCVM_noCDCVM, valueType>
+        IAD = <'IADmobile', CID, CVR, perceivedAppMode>
+        AIP = <'EMV', furtherData>
         track2ED = <PAN, expDate>
-        answerGPO= <AIP, 'AFL', track2ED, IAD, AC, CID, ATC, CTQ>
+        answerGPO = <AIP, 'AFL', track2ED, IAD, AC, CID, ATC, CTQ>
         PDOL = <TTQ, amount, value, cty, curr, date, typeP, ~UN>
 
-        MCC=mode // simplified version of MCC groups as transport and non-transport
+        MCC = mode // Simplified version of MCC groups as transport and non-transport
+
         transaction = <PAN, AIP, CTQ, PDOL, ATC, AC, IAD>
-        
-        transactionFull = <PAN, AIP, CVR, PDOL, ATC, AC, IAD, MCC> //will be sending MCC too, to the bank and payment networks
-     in
+        transactionFull = <PAN, AIP, CVR, PDOL, ATC, AC, IAD, MCC> // Will be sending MCC too, to the bank and payment networks
+    in
     [
-        In(answerGPO), 
-        Terminal_TTQ_Sent(PDOL,mode,amount,value),
+        In(answerGPO),
+        Terminal_TTQ_Sent(PDOL, mode, amount, value),
         Fr(~channelID),
+        !Shk(PAN, ~MK),
         !IssuingBank(PAN, $Bank),
         !CertBank($Bank, <<'02', $Bank, pubkBank, $CA>, sign2>)
     ]
-
   --[
-        Terminal_AC_in(PDOL,'nontransport',value,CDCVM_noCDCVM), //non-transport terminal, no SDAD to follow
-        Eq(CTQ,CDCVM_noCDCVM), // weak check
+        Terminal_AC_in(PDOL, 'nontransport', value, CDCVM_noCDCVM), //non-transport terminal, no SDAD to follow
+        Eq(CTQ, CDCVM_noCDCVM), // weak check
+
+        // A check for the AC passes as the phone generates a new AC. 
+        // From rule Generate_ATC, the ATC generated is a persistent fact that is sent out, thus the attacker can access it.
+        // From rule Compromise_Bank_Card_ShK we can see that the bank secret can also be compromised, thus the attacker can create
+        // indistinguishable ACs.
+        Eq(AC, MAC(f(~MK, ATC), <PDOL, AIP, ATC, IAD>)), // Check AC matches, passes, card even use a new ATC (?) (ATC vs ATC.1)
+
         Role($Terminal, 'Terminal'),
         OnlyOnce('Terminal_Receives_Records_EMV_Visa')
     ]->
-
     [
         NonTransportTerminal_Sends_AC($Terminal, $CA, $Bank, pubkBank, transactionFull, mode, ~channelID),
         Send($Terminal, $Bank, <~channelID, 'Visa', '1'>, <transactionFull>)
@@ -609,14 +613,14 @@ It sends AC/transaction + MCC to the bank
 */
 rule TransportTerminal_Receives_Records_EMV_Visa:
     let
-        CVR=<CDCVM_noCDCVM,valueType>
-        IAD=<'IADmobile', CID, CVR, perceivedAppMode>
-        AIP=<'EMV', furtherData>
+        CVR = <CDCVM_noCDCVM, valueType>
+        IAD = <'IADmobile', CID, CVR, perceivedAppMode>
+        AIP = <'EMV', furtherData>
         track2ED = <PAN, expDate>
-        answerGPO=<  AIP, 'AFL',  track2ED, IAD, AC, CID, ATC, CTQ >
+        answerGPO = <AIP, 'AFL', track2ED, IAD, AC, CID, ATC, CTQ>
         PDOL = <TTQ, amount, value, cty, curr, date, typeP, ~UN>
 
-        MCC=mode // simplified version of MCC groups as transport and non-transport
+        MCC = mode // simplified version of MCC groups as transport and non-transport
         transaction = <PAN, AIP, CTQ, PDOL, ATC, AC, IAD>
         
         transactionFull = <PAN, AIP, CVR, PDOL, ATC, AC, IAD, MCC> // will be sending MCC too, to the bank and payment networks
@@ -630,16 +634,14 @@ rule TransportTerminal_Receives_Records_EMV_Visa:
     ]
 
   --[
-        Terminal_AC_in(PDOL,'transport',value,CDCVM_noCDCVM), //transport terminal,  SDAD to follow
-        Eq(CTQ,CDCVM_noCDCVM), // weak check
+        Terminal_AC_in(PDOL, 'transport', value, CDCVM_noCDCVM), // Transport terminal, SDAD to follow
+        Eq(CTQ, CDCVM_noCDCVM), // Weak check
         Role($Terminal, 'Terminal'),
         OnlyOnce('Terminal_Receives_Records_EMV_Visa')
     ]->
-
     [
         Out(<'ReadRecords2Transport'>),
         TransportTerminal_Prepared_AC($Terminal, $CA, $Bank, pubkBank, transactionFull, mode,CTQ,~UN)
-       
    ]
 
 /*
@@ -649,68 +651,58 @@ and sends SDAD
 */
 rule Card_Responds_To_Extra_Read_Record:
     let
-
-       record=<$CA, certBank, certCard, CVM>
-       
+       record = <$CA, certBank, certCard, CVM>       
     in
     [
-        
         In(<'ReadRecords2Transport'>),
         !Shk(~PAN, ~MK),
         !AID(~PAN, 'Visa'),
         !ExpirationDate(~PAN, ~expDate),
         !IssuingBank(~PAN, $Bank),
-         !LtkCard(~PAN, ~privkCard),
+        !LtkCard(~PAN, ~privkCard),
         !ATC(ATC),
         !Records(~PAN, <~PAN, ~expDate, $CA, certBank, certCard, CVM>),
         Card_PostGPO2(~PAN, CDCVM_noCDCVM, perceivedAppMode, valueType, X, T, SDAD )
     ]
-
   --[
         OneCard(),
         Once(<~PAN, ATC, 'Card'>),
-        Role(~PAN,'Card'),
+        Role(~PAN, 'Card'),
         OnlyOnce('Card_Responds_To_Extra_Record'),
-        Card_SentSDAD(~PAN, CDCVM_noCDCVM, perceivedAppMode, valueType, SDAD )
+        Card_SentSDAD(~PAN, CDCVM_noCDCVM, perceivedAppMode, valueType, SDAD)
     ]->
-
     [
         Out(< 'DDA', record, SDAD>)
     ]
    
-   
 rule TransportTerminal_Receives_ExtraRecords_SDAD:
     let
-   
-       record=<$CA, <<'02', $Bank, pubkBank, $CA>, sign2>, <<'04', PAN, pubkCard, $Bank>, sign3>, CVM> 
+        record=<$CA, <<'02', $Bank, pubkBank, $CA>, sign2>, <<'04', PAN, pubkCard, $Bank>, sign3>, CVM> 
         transactionFull = <PAN, AIP, CVR, PDOL, ATC, AC, IAD, MCC>     
         X = <PDOL, CTQ>
         T = h(<X, 'ARQC', ATC, AC, IAD>)
-       
     in
     [
         In(<'DDA', record, SDAD>), 
         TransportTerminal_Prepared_AC($Terminal, $CA, $Bank, pubkBank, transactionFull, mode,CTQ,~UN),
-	Fr(~channelID),
+	    Fr(~channelID),
         !IssuingBank(PAN, $Bank),
         !CertBank($Bank, <<'02', $Bank, pubkBank, $CA>, sign2>),
         !CertCA($CA, <<'01', $CA, pubkCA, $CA>, sign1>)
     ]
-
   --[
-        Eq(mode,'transport'), //transport terminal
-        Eq( verify(sign1, <'01', $CA, pubkCA, $CA>, pubkCA), true ),
-      	Eq( verify(sign2, <'02', $Bank, pubkBank, $CA>, pubkCA), true ),
-        Eq( verify(sign3, <'04', PAN, pubkCard, $Bank>, pubkBank), true ),
-        Eq( verify(SDAD, <'05', 'ARQC', AC, T, ~UN>, pubkCard), true ),
+        Eq(mode, 'transport'), //transport terminal
+        Eq(verify(sign1, <'01', $CA, pubkCA, $CA>, pubkCA), true),
+      	Eq(verify(sign2, <'02', $Bank, pubkBank, $CA>, pubkCA), true),
+        Eq(verify(sign3, <'04', PAN, pubkCard, $Bank>, pubkBank), true),
+        Eq(verify(SDAD, <'05', 'ARQC', AC, T, ~UN>, pubkCard), true),
         Role($Terminal, 'Terminal'),
         OnlyOnce('Terminal_Receives_SDAD')
     ]->
-
     [
        TransportTerminal_Prepared_AC_CheckedSDAD($Terminal, $CA, $Bank, pubkBank, transactionFull),
        Send($Terminal, $Bank, <~channelID, 'Visa', '1'>, <transactionFull>)
-   ]   
+    ]   
    
    
 
@@ -731,12 +723,10 @@ rule TransportTerminal_Receives_ExtraRecords_SDAD:
         !IssuingBank(~PAN, $Bank)
     ]
   --[
-        //No Checks
-       
         // We are _not_ checking the above against AC from the card; on purpose -- extreme
         Once(<~PAN, ATC, 'Bank'>),
         Eq(AC, MAC(f(~MK, ATC), <PDOL, AIP, ATC, IAD>)), // checking the above against AC from the card
-        Eq(format, MCC), // check MCC against IAD format (this does not break the trace)
+        Eq(format, MCC), // check MCC against IAD format (this does not break the trace as the MCC is relayed)
 
         // _restrict(CDCVM_Check(format, cardValidation)), // Checks that CDCVM HAS BEEN ALTERED (BLOCKS THE TRACE)
  
@@ -802,9 +792,8 @@ rule TransportTerminal_Receives_ExtraRecords_SDAD:
         Eq(AC, MAC(f(~MK, ATC), <PDOL, AIP, ATC, IAD>)), // checking the above against AC from the card
         Eq(format,MCC), //check MCC against IAD format
 
-
         Bank_Got_AC_Simple(~PAN, PDOL, format),
-        Bank_Got_checkMCC(~PAN, cardValue,format,MCC),
+        Bank_Got_checkMCC(~PAN, cardValue, format, MCC),
         Bank_Got_checkMCC_full(UN,~PAN, cardValue,format,MCC)
     ]->
 
@@ -864,8 +853,44 @@ lemma correctness_general:
     &   (All event #i #j . OnlyOnce(event) @ i & OnlyOnce(event) @ j ==> #i=#j)
    "
 
+
 /*
-==Sanity check3 ==
+to pass:
+The exact trace of our apple-attack exhibited via exist-trace lemma
+*/
+lemma applePay_attack:
+  exists-trace
+  "
+    Ex cty curr PAN PDOL PDOL1 value CDCVM_noCDCVM CDCVM_noCDCVM1 valuecard formatIAD mcc
+    #t01 #t02 #t03 #t04 #t05 #t06
+    .
+    Terminal_Created(cty, curr, 'nontransport') @ t01 //non-transport terminal
+    &
+    Terminal_TTQ_out(PDOL,'nontransport', 'Low') @ t02 // sends PDOL 
+    &
+    ComputeCVR(valuecard, 'transport', CDCVM_noCDCVM1) @t03 // card believes it is in transport mode, i.e., attacker modifying PDOL
+    &
+    Card_PostGPO(PAN, PDOL1, valuecard, 'transport', CDCVM_noCDCVM1) @ t04 //card answers to GPO
+    &
+    Terminal_AC_in(PDOL, 'nontransport', value,CDCVM_noCDCVM) @ t05 //the non-transport terminal sends the AC to the bank
+    &
+    Bank_Got_AC(PAN, valuecard,  'noAuth', 'High', formatIAD, mcc) @ t06 // bank receives the "no device validation; non-zero value" but does not check the IAD, etc
+    &
+    t01<t02
+    &
+    t02<t03
+    &
+    t03<t04
+    &
+    t04<t05
+    &
+    t05<t06
+    //restrict the trace further by preventing each rule to fire more than once
+    & (All event #i #j . OnlyOnce(event) @ i & OnlyOnce(event) @ j ==> #i=#j)
+   "
+
+/*
+== Sanity check3 ==
 to pass: apple-pay does do high transactions in non-transport mode
 */
 lemma correctness_apple_high_nontransport: exists-trace
@@ -902,85 +927,12 @@ lemma correctness_apple_high_transport_noAuth: exists-trace
     &   (All event #i #j . OnlyOnce(event) @ i & OnlyOnce(event) @ j ==> #i=#j)
 "
 
-
-/*
-to pass:
-The exact trace of our apple-attack exhibited via exist-trace lemma
-*/
-lemma applePay_attack:
-  exists-trace
-  "
-    Ex cty curr PAN PDOL PDOL1 value CDCVM_noCDCVM CDCVM_noCDCVM1 valuecard formatIAD mcc
-    #t01 #t02 #t03 #t04 #t05 #t06
-    .
-    Terminal_Created(cty, curr, 'nontransport') @ t01 //non-transport terminal
-    &
-    Terminal_TTQ_out(PDOL,'nontransport', 'Low') @ t02 // sends PDOL 
-    &
-    ComputeCVR(valuecard, 'transport', CDCVM_noCDCVM1) @t03 // card believes it is in transport mode, i.e., attacker modifying PDOL
-    &
-    Card_PostGPO(PAN, PDOL1,valuecard, 'transport', CDCVM_noCDCVM1) @ t04 //card answers to GPO
-    &
-    Terminal_AC_in(PDOL,'nontransport',value,CDCVM_noCDCVM) @ t05 //the non-transport terminal sends the AC to the bank
-    &
-    Bank_Got_AC(PAN, valuecard,  'noAuth', 'High', formatIAD, mcc) @ t06 // bank receives the "no device validation; non-zero value" but does not check the IAD, etc
-    &
-    t01<t02
-    &
-    t02<t03
-    &
-    t03<t04
-    &
-    t04<t05
-    &
-    t05<t06
-    //restrict the trace further by preventing each rule to fire more than once
-    &   (All event #i #j . OnlyOnce(event) @ i & OnlyOnce(event) @ j ==> #i=#j)
-   "
-
-/*
-to pass:
-The exact trace of our apple-attack exhibited via exist-trace lemma
-With the addition of checking the PDOL HAS NOT BEEN CHANGED
-*/
-lemma applePay_attack_PDOL_check:
-  exists-trace
-  "
-    Ex cty curr PAN PDOL PDOL1 value CDCVM_noCDCVM CDCVM_noCDCVM1 valuecard formatIAD mcc
-    #t01 #t02 #t03 #t04 #t05 #t06
-    .
-    Terminal_Created(cty, curr, 'nontransport') @ t01 //non-transport terminal
-    &
-    Terminal_TTQ_out(PDOL,'nontransport', 'Low') @ t02 // sends PDOL 
-    &
-    ComputeCVR(valuecard, 'transport', CDCVM_noCDCVM1) @t03 // card believes it is in transport mode, i.e., attacker modifying PDOL
-    &
-    Card_PostGPO(PAN, PDOL1,valuecard, 'transport', CDCVM_noCDCVM1) @ t04 //card answers to GPO
-    &
-    Terminal_AC_in(PDOL,'nontransport',value,CDCVM_noCDCVM) @ t05 //the non-transport terminal sends the AC to the bank
-    &
-    Bank_Got_AC(PAN, valuecard,  'noAuth', 'High', formatIAD, mcc) @ t06 // bank receives the "no device validation; non-zero value" but does not check the IAD, etc
-    &
-    t01<t02
-    &
-    t02<t03
-    &
-    t03<t04
-    &
-    t04<t05
-    &
-    t05<t06
-    //restrict the trace further by preventing each rule to fire more than once
-    & (All event #i #j . OnlyOnce(event) @ i & OnlyOnce(event) @ j ==> #i=#j)
-   "
-
 /*
 all-traces lemma looking for abuse of CDCDM in transport-nontransport modes, should fail:
 
 //i.e., generic way of looking for the apple-attack
 */
 lemma terminalModes_CDCVM_aligned_at_bankEnd:
-
 "All  PAN valuecard mcc #t02
     .
     // no device validation & no validation at the bank side
@@ -1024,17 +976,16 @@ Apple attack goes away if because issuers check the MCCs against the iadFormat
 */
 lemma bank_checking_MCC_stops_ModeChange:
 
-"All PAN valuecard  iadFormat   mcc   #t02
+"All PAN valuecard iadFormat mcc #t02
     .
     //  banks checks iadFormat against mcc
-     Bank_Got_checkMCC(PAN, valuecard,  iadFormat, mcc) @ t02
-    
+    Bank_Got_checkMCC(PAN, valuecard,  iadFormat, mcc) @ t02
     ==>
-    // The phone perceived an appMode  issued this 'iadFormat' that the bank got
-    ( Ex #t01 . Card_PostGPONoCheckShortest(PAN, valuecard,  iadFormat ) @ t01
+    // The phone perceived an appMode issued this 'iadFormat' that the bank got
+    ( Ex #t01 . Card_PostGPONoCheckShortest(PAN, valuecard, iadFormat) @ t01
     & t01<t02
     ) |
-    ( (Ex A #a. Compromise(A)@a))
+    ((Ex A #a. Compromise(A)@a))
 "
 
 /*
@@ -1062,7 +1013,7 @@ exists-trace
     &
     Terminal_AC_in(PDOL2,mode,value,CDCVM_noCDCVM1) @ t05  //relay terminal got AC
     &
-    Bank_Got_checkMCC_full(ID1,PAN, value,    formatIAD, mcc) @ t06  //bank checks real terminal and alllow
+    Bank_Got_checkMCC_full(ID1,PAN, value, formatIAD, mcc) @ t06  //bank checks real terminal and allow
     &
     t01<t02
     &
@@ -1093,7 +1044,7 @@ lemma value_transp_zero:
 /*simple sanity check*/
 lemma value_transp_low:
   exists-trace
-  "Ex PAN pdol   iadFormat  CDCVM_noCDCVM #i #j.
+  "Ex PAN pdol iadFormat CDCVM_noCDCVM #i #j.
     i < j &
     Terminal_TTQ_out(pdol,'transport','Low')@i &
     Card_PostGPO(PAN, pdol,'Low',  iadFormat , CDCVM_noCDCVM)@j &
@@ -1108,7 +1059,7 @@ lemma value_transp_low:
 /*simple sanity check*/
 lemma value_nontransp_low:
   exists-trace
-  "Ex PAN pdol   iadFormat  CDCVM_noCDCVM #i #j.
+  "Ex PAN pdol iadFormat CDCVM_noCDCVM #i #j.
     i < j &
     Terminal_TTQ_out(pdol,'nontransport','Low')@i &
     Card_PostGPO(PAN, pdol,'Low',  iadFormat, CDCVM_noCDCVM)@j &
