@@ -599,9 +599,39 @@ rule NonTransportTerminal_Receives_Records_EMV_Visa:
         OnlyOnce('Terminal_Receives_Records_EMV_Visa')
     ]->
     [
-        NonTransportTerminal_Sends_AC($Terminal, $CA, $Bank, pubkBank, transactionFull, mode, ~channelID),
-        Send($Terminal, $Bank, <~channelID, 'Visa', '1'>, <transactionFull>)
+        // NonTransportTerminal_Sends_AC($Terminal, $CA, $Bank, pubkBank, transactionFull, mode, ~channelID),
+        NonTransportTerminal_Prepared_AC($Terminal, $CA, $Bank, pubkBank, transactionFull, mode,CTQ,~UN)
+        // Send($Terminal, $Bank, <~channelID, 'Visa', '1'>, <transactionFull>)
    ]
+
+rule NonTransportTerminal_Receives_ExtraRecords_SDAD:
+    let
+        record=<$CA, <<'02', $Bank, pubkBank, $CA>, sign2>, <<'04', PAN, pubkCard, $Bank>, sign3>, CVM> 
+        transactionFull = <PAN, AIP, CVR, PDOL, ATC, AC, IAD, MCC>     
+        X = <PDOL, CTQ>
+        T = h(<X, 'ARQC', ATC, AC, IAD>)
+    in
+    [
+        In(<'DDA', record, SDAD>), 
+        NonTransportTerminal_Prepared_AC($Terminal, $CA, $Bank, pubkBank, transactionFull, mode,CTQ,~UN),
+	    Fr(~channelID),
+        !IssuingBank(PAN, $Bank),
+        !CertBank($Bank, <<'02', $Bank, pubkBank, $CA>, sign2>),
+        !CertCA($CA, <<'01', $CA, pubkCA, $CA>, sign1>)
+    ]
+  --[
+        Eq(mode, 'transport'), //transport terminal
+        Eq(verify(sign1, <'01', $CA, pubkCA, $CA>, pubkCA), true),
+      	Eq(verify(sign2, <'02', $Bank, pubkBank, $CA>, pubkCA), true),
+        Eq(verify(sign3, <'04', PAN, pubkCard, $Bank>, pubkBank), true),
+        Eq(verify(SDAD, <'05', 'ARQC', AC, T, ~UN>, pubkCard), true),
+        Role($Terminal, 'Terminal'),
+        OnlyOnce('Terminal_Receives_SDAD')
+    ]->
+    [
+       NonTransportTerminal_Prepared_AC_CheckedSDAD($Terminal, $CA, $Bank, pubkBank, transactionFull),
+       Send($Terminal, $Bank, <~channelID, 'Visa', '1'>, <transactionFull>)
+    ]   
    
    /*
 Terminal receives answer to GPO
