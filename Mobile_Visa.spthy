@@ -1,20 +1,17 @@
 /*
 
 Model for mobile-apps with VISA card CDA and DDA mode
-
 DDA mode --> occurs only in transport/transit mode  (an extra read-records and the SDAD is sent after the GPO response; only after SDAD is checked, the AC is sent to the the bank)
-
 CDA mode --> occurs in non-transport (no SDAD sent; AC sent to the bank right after the GPO response)
 
-
 ==TERMINALS==
--- terminals can be in transport and non-transport mode
--- terminals in non-transport/shop mode do NOT ask for 'zero' values
--- terminals in transport mode can ask for any value, include 'high' values (as per Apple's operation models)
--- terminals in transport mode send 'MagicBytes'
--- terminals in non-transport mode send 'MagicBytes'
--- terminal--to--bank channel is secure
--- terminal sends to bank an MCC code (which is different for transport and non-transport but not more refined for now)
+-- Terminals can be in transport and non-transport mode
+-- Terminals in non-transport/shop mode do NOT ask for 'zero' values
+-- Terminals in transport mode can ask for any value, include 'high' values (as per Apple's operation models)
+-- Terminals in transport mode send 'MagicBytes'
+-- Terminals in non-transport mode send 'MagicBytes'
+-- Terminal--to--bank channel is secure
+-- Terminal sends to bank an MCC code (which is different for transport and non-transport but not more refined for now)
 
 ==APPS==
 -- mobile apps with a visa card,  Samsung-Pay and Apple-Pay
@@ -48,17 +45,13 @@ lemma transportMode_onlyForZero_onApp_stops_ModeChange --> holds
 
 
 4. The bank checking the CVR stops the Apple-attack
-
-lemma  bank_checking_CVR_stops_ModeChange --> holds
-
+    lemma  bank_checking_CVR_stops_ModeChange --> holds
 
 5. The bank checking the MCC against the IAD format stops the Apple-attack
-
-lemma   bank_checking_MCC_stops_ModeChange  --> holds
+    lemma   bank_checking_MCC_stops_ModeChange  --> holds
 
 6.  The bank checking the MCC against the IAD format does not stop relaying to terminals with the same MCC
-
-lemma   bank_checking_MCC_allows_RelayToSameMCC  --> holds
+    lemma   bank_checking_MCC_allows_RelayToSameMCC  --> holds
 
 
 ===========================================================================
@@ -756,43 +749,39 @@ rule TransportTerminal_Receives_ExtraRecords_SDAD:
         Bank_Checked_AC_Visa($Bank, $Terminal, transactionFull, channelID, AC)
     ]
 
-/*Bank receives AC
+/*
+    Bank receives AC
 
- Case2: Bank does  checks on the IAD/CVR, but not on the MCC 
- */
+    Case2: Bank does checks on the IAD/CVR, but not on the MCC 
+*/
  rule Bank_checkCVR_noCheckMCC:
     let
         CVR=<cardValidation,cardValue>
         IAD=<'IADmobile', CID, CVR, format>
         PDOL = <'ARQC', amount, value, cty, curr, date, typeP, UN>
         transactionFull = <~PAN, AIP, CVM, PDOL, ATC, AC, IAD, MCC>
-
     in
     [
         Recv($Terminal, $Bank, <channelID, 'Visa', '1'>, <transactionFull>),
         !Shk(~PAN, ~MK),
         !IssuingBank(~PAN, $Bank)
     ]
-
   --[
-
         Once(<~PAN, ATC, 'Bank'>),
         Eq(AC, MAC(f(~MK, ATC), <PDOL, AIP, ATC, IAD>)), // checking the above against AC from the card
 
-
-        _restrict(CDCVM_OnOff_ByModes(format,cardValidation)), //checking CDCVM happens on non-transport; cardValidation is in the CVR; 
+        _restrict(CDCVM_OnOff_ByModes(format, cardValidation)), //checking CDCVM happens on non-transport; cardValidation is in the CVR; 
         Bank_Got_AC_Simple(~PAN, PDOL, format),
         Bank_Got_AC_checkedCVR(~PAN, value, cardValidation,cardValue, format)
     ]->
-
     [
         //protocol finished
         Bank_Checked_AC_Visa($Bank, $Terminal, transactionFull, channelID, AC)
     ]
 
-/*Bank receives AC
-
- Case3: Bank does not  check on the CVR, but does check the MCC  against the IAD format
+/*
+    Bank receives AC
+    Case3: Bank does not check on the CVR, but does check the MCC against the IAD format
  */
  rule Bank_ChecksMCC_noCheckCVR:
     let
@@ -800,32 +789,25 @@ rule TransportTerminal_Receives_ExtraRecords_SDAD:
         IAD=<'IADmobile', CID, CVR, format>
         PDOL = <'ARQC', amount, value, cty, curr, date, typeP, UN>
         transactionFull = <~PAN, AIP, CVM, PDOL, ATC, AC, IAD, MCC>
-
     in
     [
         Recv($Terminal, $Bank, <channelID, 'Visa', '1'>, <transactionFull>),
         !Shk(~PAN, ~MK),
         !IssuingBank(~PAN, $Bank)
     ]
-
   --[
-
         Once(<~PAN, ATC, 'Bank'>),
         Eq(AC, MAC(f(~MK, ATC), <PDOL, AIP, ATC, IAD>)), // checking the above against AC from the card
         Eq(format,MCC), //check MCC against IAD format
-
 
         Bank_Got_AC_Simple(~PAN, PDOL, format),
         Bank_Got_checkMCC(~PAN, cardValue,format,MCC),
         Bank_Got_checkMCC_full(UN,~PAN, cardValue,format,MCC)
     ]->
-
     [
         //protocol finished
         Bank_Checked_AC_Visa($Bank, $Terminal, transactionFull, channelID, AC)
     ]
-    
-    
     
 
 restriction equal:
@@ -1056,10 +1038,11 @@ lemma bank_checking_CVR_stops_ModeChange:
     .
     //  device validation -- auth; some limit (high, low) at the bank
     Bank_Got_AC_checkedCVR(PAN, value,  auth, valuecard,  iadFormat) @ t02
-
      ==>
-    /*The phone saw  identified the mode mirrors it in the iadFormat, and its  CDCVM 
-    status in 'auth' is as the bank got it*/
+    /* 
+        The phone saw identified the mode mirrors it in the iadFormat, and its  CDCVM 
+        status in 'auth' is as the bank got it
+    */
     ( Ex #t01 . Card_PostGPONoCheckShort(PAN, auth,  iadFormat, valuecard) @ t01
     & t01<t02
     ) |

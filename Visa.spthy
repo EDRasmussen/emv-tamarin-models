@@ -460,7 +460,7 @@ rule Card_Responds_To_GPO_EMV_Visa_Apple:
         track2ED = <~PAN, ~expDate>
         CID = 'ARQC'
         CTQ = CDCVM_noCDCVM
-        CVR = <CDCVM_noCDCVM,valueType> //card judgement
+        CVR = <CDCVM_noCDCVM, valueType> //card judgement
         IAD = <'IADmobile', CID, CVR, perceivedAppMode>
         AIP = <'EMVDDA', $furtherData>
         AC = MAC(f(~MK, ATC), <PDOL, AIP, ATC, IAD>)
@@ -489,6 +489,7 @@ rule Card_Responds_To_GPO_EMV_Visa_Apple:
         // a la apple-pay; no real check on value re the CVR/CDCVM
         Card_PostGPONoCheckShort(~PAN, CDCVM_noCDCVM, perceivedAppMode, valueType),
         Card_PostGPONoCheckShortest(~PAN, valueType, perceivedAppMode),
+        Card_PostGPONoCheckPDOL(~PAN, TTQ, $amount, value, country, currency, date, typeP, UN),
         
         OnlyOnce('Card_Responds_To_GPO_EMV_Visa_NoCheck')
     ]->
@@ -612,7 +613,7 @@ rule NonTransportTerminal_Receives_ExtraRecords_SDAD:
         T = h(<X, 'ARQC', ATC, AC, IAD>)
     in
     [
-        In(<'DDA', record, SDAD>), 
+        In(<'CDA', record, SDAD>), 
         NonTransportTerminal_Prepared_AC($Terminal, $CA, $Bank, pubkBank, transactionFull, mode,CTQ,~UN),
 	    Fr(~channelID),
         !IssuingBank(PAN, $Bank),
@@ -620,11 +621,15 @@ rule NonTransportTerminal_Receives_ExtraRecords_SDAD:
         !CertCA($CA, <<'01', $CA, pubkCA, $CA>, sign1>)
     ]
   --[
-        Eq(mode, 'transport'), //transport terminal
+        // Verify that the mode is NON TRANSPORT
+        Eq(mode, 'nontransport'), // non transport terminal
+
+        // Verify SDAD data
         Eq(verify(sign1, <'01', $CA, pubkCA, $CA>, pubkCA), true),
       	Eq(verify(sign2, <'02', $Bank, pubkBank, $CA>, pubkCA), true),
         Eq(verify(sign3, <'04', PAN, pubkCard, $Bank>, pubkBank), true),
         Eq(verify(SDAD, <'05', 'ARQC', AC, T, ~UN>, pubkCard), true),
+        
         Role($Terminal, 'Terminal'),
         OnlyOnce('Terminal_Receives_SDAD')
     ]->
@@ -677,7 +682,6 @@ rule TransportTerminal_Receives_Records_EMV_Visa:
 /*
 Card responds to extra read record in transport mode
 and sends SDAD
-
 */
 rule Card_Responds_To_Extra_Read_Record:
     let
@@ -702,7 +706,7 @@ rule Card_Responds_To_Extra_Read_Record:
         Card_SentSDAD(~PAN, CDCVM_noCDCVM, perceivedAppMode, valueType, SDAD)
     ]->
     [
-        Out(< 'DDA', record, SDAD>)
+        Out(<'DDA', record, SDAD>)
     ]
    
 rule TransportTerminal_Receives_ExtraRecords_SDAD:
@@ -714,7 +718,7 @@ rule TransportTerminal_Receives_ExtraRecords_SDAD:
     in
     [
         In(<'DDA', record, SDAD>), 
-        TransportTerminal_Prepared_AC($Terminal, $CA, $Bank, pubkBank, transactionFull, mode,CTQ,~UN),
+        TransportTerminal_Prepared_AC($Terminal, $CA, $Bank, pubkBank, transactionFull, mode, CTQ, ~UN),
 	    Fr(~channelID),
         !IssuingBank(PAN, $Bank),
         !CertBank($Bank, <<'02', $Bank, pubkBank, $CA>, sign2>),
@@ -732,17 +736,15 @@ rule TransportTerminal_Receives_ExtraRecords_SDAD:
     [
        TransportTerminal_Prepared_AC_CheckedSDAD($Terminal, $CA, $Bank, pubkBank, transactionFull),
        Send($Terminal, $Bank, <~channelID, 'Visa', '1'>, <transactionFull>)
-    ]   
-   
-   
+    ]
 
 /*Bank receives AC
 
  Case1: Bank does no real checks on the IAD 
  */
- rule Bank_Receives_AC_Visa_noIAD_check:
+rule Bank_Receives_AC_Visa_noIAD_check:
     let
-        CVR = <cardValidation,cardValue>
+        CVR = <cardValidation, cardValue>
         IAD = <'IADmobile', CID, CVR, format>
         PDOL = <'ARQC', amount, value, cty, curr, date, typeP, UN>
         transactionFull = <~PAN, AIP, CVM, PDOL, ATC, AC, IAD, MCC>
@@ -759,7 +761,7 @@ rule TransportTerminal_Receives_ExtraRecords_SDAD:
         Eq(format, MCC), // check MCC against IAD format (this does not break the trace as the MCC is relayed)
 
         // _restrict(CDCVM_Check(format, cardValidation)), // Checks that CDCVM HAS BEEN ALTERED (BLOCKS THE TRACE)
- 
+        Bank_Got_AC_checkedPDOL(~PAN, 'ARQC', amount, value, cty, curr, date, typeP, UN),
         Bank_Got_AC_Simple(~PAN, PDOL, MCC),
         Bank_Got_AC(~PAN, value, cardValidation, cardValue, MCC, MCC)
     ]->
@@ -767,8 +769,6 @@ rule TransportTerminal_Receives_ExtraRecords_SDAD:
         //protocol finished at bank side
         Bank_Checked_AC_Visa($Bank, $Terminal, transactionFull, channelID, AC)
     ]
-
-
 
 /*Bank receives AC
 
@@ -803,7 +803,7 @@ rule TransportTerminal_Receives_ExtraRecords_SDAD:
 
  Case3: Bank does not  check on the CVR, but does check the MCC  against the IAD format
  */
- rule Bank_ChecksMCC_noCheckCVR:
+rule Bank_ChecksMCC_noCheckCVR:
     let
         CVR=<cardValidation,cardValue>
         IAD=<'IADmobile', CID, CVR, format>
@@ -831,7 +831,7 @@ rule TransportTerminal_Receives_ExtraRecords_SDAD:
         //protocol finished
         Bank_Checked_AC_Visa($Bank, $Terminal, transactionFull, channelID, AC)
     ]
-    
+
 restriction equal:
   "All a b #i. Eq(a, b)@i ==> a = b"
 
@@ -896,13 +896,13 @@ lemma applePay_attack:
     .
     Terminal_Created(cty, curr, 'nontransport') @ t01 //non-transport terminal
     &
-    Terminal_TTQ_out(PDOL,'nontransport', 'Low') @ t02 // sends PDOL 
+    Terminal_TTQ_out(PDOL, 'nontransport', 'Low') @ t02 // sends PDOL 
     &
     ComputeCVR(valuecard, 'transport', CDCVM_noCDCVM1) @t03 // card believes it is in transport mode, i.e., attacker modifying PDOL
     &
     Card_PostGPO(PAN, PDOL1, valuecard, 'transport', CDCVM_noCDCVM1) @ t04 //card answers to GPO
     &
-    Terminal_AC_in(PDOL, 'nontransport', value,CDCVM_noCDCVM) @ t05 //the non-transport terminal sends the AC to the bank
+    Terminal_AC_in(PDOL, 'nontransport', value, CDCVM_noCDCVM) @ t05 //the non-transport terminal sends the AC to the bank
     &
     Bank_Got_AC(PAN, valuecard,  'noAuth', 'High', formatIAD, mcc) @ t06 // bank receives the "no device validation; non-zero value" but does not check the IAD, etc
     &
@@ -918,6 +918,41 @@ lemma applePay_attack:
     //restrict the trace further by preventing each rule to fire more than once
     & (All event #i #j . OnlyOnce(event) @ i & OnlyOnce(event) @ j ==> #i=#j)
    "
+
+lemma bank_checking_PDOL_stops_ModeChange:
+   "All PAN TTQ amount value country currency date typeP UN  #t02
+       .
+       //  device validation -- auth; some limit (high, low) at the bank
+       Bank_Got_AC_checkedPDOL(PAN, TTQ, amount, value, country, currency, date, typeP, UN) @ t02
+        ==>
+       /*
+        The phone saw  identified the mode mirrors it in the iadFormat, and its CDCVM 
+        status in 'auth' is as the bank got it
+       */
+       ( Ex #t01 . Card_PostGPONoCheckPDOL(PAN, TTQ, amount, value, country, currency, date, typeP, UN) @ t01
+       & t01<t02
+       ) |
+       ( (Ex A #a. Compromise(A)@a))
+   "
+
+/*
+    to pass:
+    Apple attack goes away when issuers check the IAD 
+    (as only transport should have CVR byte5 bit2 on 0)
+*/
+lemma bank_checking_CVR_stops_ModeChange:
+"All PAN value valuecard iadFormat auth  #t02
+    .
+    //  device validation -- auth; some limit (high, low) at the bank
+    Bank_Got_AC_checkedCVR(PAN, value, auth, valuecard,  iadFormat) @ t02
+     ==>
+    /*The phone saw  identified the mode mirrors it in the iadFormat, and its  CDCVM 
+    status in 'auth' is as the bank got it*/
+    ( Ex #t01 . Card_PostGPONoCheckShort(PAN, auth, iadFormat, valuecard) @ t01
+    & t01<t02
+    ) |
+    ( (Ex A #a. Compromise(A)@a))
+"
 
 /*
 == Sanity check3 ==
@@ -975,26 +1010,6 @@ lemma terminalModes_CDCVM_aligned_at_bankEnd:
         & t01<t02
     )
     |
-    ( (Ex A #a. Compromise(A)@a))
-"
-
-/*
-to pass:
-
-Apple attack goes away when issuers check the IAD 
-(as only transport should have CVR byte5 bit2 on 0)
-*/
-lemma bank_checking_CVR_stops_ModeChange:
-"All PAN value valuecard iadFormat auth  #t02
-    .
-    //  device validation -- auth; some limit (high, low) at the bank
-    Bank_Got_AC_checkedCVR(PAN, value,  auth, valuecard,  iadFormat) @ t02
-     ==>
-    /*The phone saw  identified the mode mirrors it in the iadFormat, and its  CDCVM 
-    status in 'auth' is as the bank got it*/
-    ( Ex #t01 . Card_PostGPONoCheckShort(PAN, auth,  iadFormat, valuecard) @ t01
-    & t01<t02
-    ) |
     ( (Ex A #a. Compromise(A)@a))
 "
 
