@@ -592,9 +592,9 @@ rule NonTransportTerminal_Receives_Records_EMV_Visa:
 
         // A check for the AC passes as the phone generates a new AC. 
         // From rule Generate_ATC, the ATC generated is a persistent fact that is sent out, thus the attacker can access it.
-        // From rule Compromise_Bank_Card_ShK we can see that the bank secret can also be compromised, thus the attacker can create
-        // indistinguishable ACs.
         Eq(AC, MAC(f(~MK, ATC), <PDOL, AIP, ATC, IAD>)), // Check AC matches, passes, card even use a new ATC (?) (ATC vs ATC.1)
+
+        Receive_Records_SDAD_Check($CA, $Bank, AC, pubkBank, transactionFull, mode, CTQ, ~UN),
 
         Role($Terminal, 'Terminal'),
         OnlyOnce('Terminal_Receives_Records_EMV_Visa')
@@ -629,6 +629,8 @@ rule NonTransportTerminal_Receives_ExtraRecords_SDAD:
       	Eq(verify(sign2, <'02', $Bank, pubkBank, $CA>, pubkCA), true),
         Eq(verify(sign3, <'04', PAN, pubkCard, $Bank>, pubkBank), true),
         Eq(verify(SDAD, <'05', 'ARQC', AC, T, ~UN>, pubkCard), true),
+
+        Terminal_Checks_ExtraRecords_SDAD($CA, $Bank, AC, pubkBank, transactionFull, mode, CTQ, ~UN),
         
         Role($Terminal, 'Terminal'),
         OnlyOnce('Terminal_Receives_SDAD')
@@ -730,6 +732,7 @@ rule TransportTerminal_Receives_ExtraRecords_SDAD:
       	Eq(verify(sign2, <'02', $Bank, pubkBank, $CA>, pubkCA), true),
         Eq(verify(sign3, <'04', PAN, pubkCard, $Bank>, pubkBank), true),
         Eq(verify(SDAD, <'05', 'ARQC', AC, T, ~UN>, pubkCard), true),
+        
         Role($Terminal, 'Terminal'),
         OnlyOnce('Terminal_Receives_SDAD')
     ]->
@@ -918,18 +921,35 @@ lemma applePay_attack:
     //restrict the trace further by preventing each rule to fire more than once
     & (All event #i #j . OnlyOnce(event) @ i & OnlyOnce(event) @ j ==> #i=#j)
    "
-
+/*
+    to pass:
+    Apple attack goes away when issuers check the PDOL
+*/
 lemma bank_checking_PDOL_stops_ModeChange:
    "All PAN TTQ amount value country currency date typeP UN  #t02
        .
-       //  device validation -- auth; some limit (high, low) at the bank
+       //  device validation
        Bank_Got_AC_checkedPDOL(PAN, TTQ, amount, value, country, currency, date, typeP, UN) @ t02
         ==>
        /*
-        The phone saw  identified the mode mirrors it in the iadFormat, and its CDCVM 
-        status in 'auth' is as the bank got it
+        The PDOL has changed
        */
        ( Ex #t01 . Card_PostGPONoCheckPDOL(PAN, TTQ, amount, value, country, currency, date, typeP, UN) @ t01
+       & t01<t02
+       ) |
+       ( (Ex A #a. Compromise(A)@a))
+   "
+
+/*
+    to pass:
+
+*/
+lemma bank_checking_SDAD_stops_ModeChange:
+   "All CA Bank AC pubkBank transactionFull mode CTQ UN  #t02
+       .
+       Terminal_Checks_ExtraRecords_SDAD(CA, Bank, AC, pubkBank, transactionFull, mode, CTQ, UN) @ t02
+        ==>
+       ( Ex #t01 . Receive_Records_SDAD_Check(CA, Bank, AC, pubkBank, transactionFull, mode, CTQ, UN) @ t01
        & t01<t02
        ) |
        ( (Ex A #a. Compromise(A)@a))
@@ -946,7 +966,7 @@ lemma bank_checking_CVR_stops_ModeChange:
     //  device validation -- auth; some limit (high, low) at the bank
     Bank_Got_AC_checkedCVR(PAN, value, auth, valuecard,  iadFormat) @ t02
      ==>
-    /*The phone saw  identified the mode mirrors it in the iadFormat, and its  CDCVM 
+    /*The phone identified the mode mirrors it in the iadFormat, and its  CDCVM 
     status in 'auth' is as the bank got it*/
     ( Ex #t01 . Card_PostGPONoCheckShort(PAN, auth, iadFormat, valuecard) @ t01
     & t01<t02

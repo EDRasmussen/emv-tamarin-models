@@ -155,11 +155,10 @@ rule Create_Retail_Terminal_DB:
     in 
         [ ] --[ TerminalCreated($Term,MCC,'DB'), Once($Term) ]-> [ !Terminal($Term,MCC,'DB') ]
 
-/* We only consider comprimsed cards (e.g. key leakage via power analysis attacks) 
-   Compromised terminals, banks and CAs are outisde our attack model. 
-
+/* 
+    We only consider comprimsed cards (e.g. key leakage via power analysis attacks) 
+    Compromised terminals, banks and CAs are outisde our attack model. 
 */
-
 rule Compromise_Card:
     [ !Card(Track2, DBsupport, Bank, KM, privkCard, pubkCard, certCard, certBank, cardAIP, CVMlist) ]
   --[ Compromise(Track2) ]->
